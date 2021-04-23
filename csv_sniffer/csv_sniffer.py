@@ -457,7 +457,7 @@ class CSVSniffer:
 class ColumnInfo:
     numeric_types = [
         'int8', 'uint8',
-        'int16' 'uint16',
+        'int16', 'uint16',
         'int32', 'int64',
         'uint32', 'uint64',
         'float32', 'float64',
