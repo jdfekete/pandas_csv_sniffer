@@ -332,8 +332,9 @@ class CSVSniffer:
             if sniffer.has_header(head):
                 self.params['header'] = 0
                 self.header.value = 0
-        else:
-            self.header.value = self.params['header']
+            else:
+                self.header.value = -1
+                self.params['header'] = None
         return self._dialect
 
     def dataframe(self, force=False):
@@ -388,26 +389,41 @@ class CSVSniffer:
             self.columns.options = []
             self.columns.disabled = True
             return
-        for column in df.columns:
-            col = df[column]
-            if self.column.get(column) is None:
-                col = ColumnInfo(self, col)
-                self.column[column] = col
+        # Lazy creation of columns
+        # for column in df.columns:
+        #     col = df[column]
+        #     if self.column.get(column) is None:
+        #         col = ColumnInfo(self, col)
+        #         self.column[column] = col
         for column in list(self.column):
             if column not in df.columns:
                 col = self.column[column]
                 col.box.close()
                 del self.column[column]
-        self.columns.options = list(df.columns)
+        self.columns.options = [str(c) for c in df.columns]
         self.columns.disabled = False
-        self.show_column(df.columns[0])
+        self.show_column(str(df.columns[0]))
+
+    def get_column(self, column):
+        df = self._df
+        if column not in df.columns:
+            try:
+                return self.get_column(int(column))
+            except ValueError:
+                pass
+            return None
+        col = self.column.get(column, None)
+        if col is None:
+            col = ColumnInfo(self, df[column])
+            self.column[column] = col
+        return col
 
     def show_column(self, column):
-        if column not in self.column:
+        col = self.get_column(column)
+        if col is None:
             # print(f"Not in columns: '{column}'")
             self.details.children = [self.no_detail]
             return
-        col = self.column[column]
         self.details.children = [col.box]
 
     def rename_columns(self):
@@ -473,7 +489,7 @@ class ColumnInfo:
         self.series = series
         self.default_type = series.dtype.name
         self.name = widgets.Text(description="Name:",
-                                 value=series.name,
+                                 value=str(series.name),
                                  continuous_update=False,
                                  disabled=True)
         self.type = widgets.Text(description="Type:",
@@ -483,7 +499,7 @@ class ColumnInfo:
                                     value=True)
         self.use.observe(self.usecols_column, names='value')
         self.rename = widgets.Text(description="Rename:",
-                                   value=series.name)
+                                   value=str(series.name))
         self.rename.observe(self.rename_column, names='value')
         self.retype = widgets.Dropdown(description="Retype:",
                                        options=self.retype_values(),

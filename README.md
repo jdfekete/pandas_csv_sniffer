@@ -8,7 +8,7 @@ The `pandas.read_csv` function is a swiss army knife, very flexible but very com
 ![Swiss Army Knife](https://upload.wikimedia.org/wikipedia/commons/thumb/3/37/Victorinox_Swiss_Army_SwissChamp_XAVT.jpg/640px-Victorinox_Swiss_Army_SwissChamp_XAVT.jpg)
 
 
-The GUI is launched with creating a  `CSVSniffer` object with a url and, optionally, other arguments you would pass to `pandas.read_csv`; if you're not sure, you can omit them.
+The GUI is launched by creating a `CSVSniffer` object with a url and, optionally, other arguments you would pass to `pandas.read_csv`; if you're not sure, you can omit them.
 
 At the first stage, the GUI first loads 100 lines form the url and tries to guess the main csv loading parameters. If it fails, the GUI shows the raw data and allows exploring interactively the suitable parameters (delimiter, doublequote, escapechar, skipinitialspace, quotechar, quoting) until the parsing succeeds.
 
