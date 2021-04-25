@@ -12,6 +12,8 @@ setup(
     license="MIT",
     packages=['csv_sniffer'],
     platforms='any',
+    setup_requires=['nose'],
+    test_suite='nose.collector',
     install_requires=[
         "pandas",
         "fsspec",

@@ -81,9 +81,10 @@ class CSVSniffer:
     delimiters = [",", ";", "<TAB>", "<SPACE>", ":", "skip initial space"]
     del_values = [",", ";", "\t", " ", ":", "skip"]
 
-    def __init__(self, path, lines=100, **args):
+    def __init__(self, path, lines=100, cache_storage=None, **args):
         self.path = path
         self._args = args
+        self._cache_storage = cache_storage
         self.lines = widgets.BoundedIntText(value=lines,
                                             min=10, max=1000,
                                             continuous_update=False,
@@ -231,7 +232,11 @@ class CSVSniffer:
     def _skiprows_cb(self, change):
         skip = change['new']
         self._head = ''
-        self.params['skiprows'] = skip
+        if skip == 0:
+            self.params.pop('skiprows')
+        else:
+            self.params['skiprows'] = skip
+        self.set_cmdline()
         self.dataframe(force=True)
 
     def _lines_cb(self, change):
@@ -308,7 +313,13 @@ class CSVSniffer:
     def head(self):
         if self._head:
             return self._head
-        with fsspec.open(self.path, mode="rt", compression="infer") as inp:
+        if self.cache_storage:
+            filecache = {'cache_storage': self.cache_storage}
+        else:
+            filecache = None
+        with fsspec.open(self.path, mode="rt",
+                         compression="infer",
+                         filecache=filecache) as inp:
             lineno = 0
             # TODO assumes that newline is correctly specified to fsspec
             for line in inp:
@@ -427,10 +438,14 @@ class CSVSniffer:
         self.details.children = [col.box]
 
     def rename_columns(self):
+        columns = list(self._df.columns)
         names = [self.column[col].rename.value
-                 for col in self._df.columns]
-        self._rename = names
-        # print(f"Renames: {names}")
+                 for col in columns]
+        if names != columns:
+            self.params['names'] = names
+        else:
+            self.params.pop('names')
+        self.set_cmdline()
 
     def usecols_columns(self):
         names = [col for col in self._df.columns
