@@ -177,8 +177,8 @@ class CSVSniffer:
             self.global_tab.set_title(i, title)
 
         # Column selection
-        self.columns = widgets.Select(disabled=True,
-                                      rows=7)
+        self.columns = widgets.SelectMultiple(disabled=True,
+                                              rows=7)
         self.columns.observe(self._columns_cb, names='value')
         # Column details
         self.column = {}
@@ -250,6 +250,8 @@ class CSVSniffer:
 
     def _columns_cb(self, change):
         column = change['new']
+        if len(column) == 1:
+            column = column[0]
         # print(f"Column: '{column}'")
         self.show_column(column)
 
@@ -313,13 +315,13 @@ class CSVSniffer:
     def head(self):
         if self._head:
             return self._head
-        if self.cache_storage:
-            filecache = {'cache_storage': self.cache_storage}
+        if self._cache_storage:
+            filecache = {'filecache': {'cache_storage': self.cache_storage}}
         else:
-            filecache = None
+            filecache = {}
         with fsspec.open(self.path, mode="rt",
                          compression="infer",
-                         filecache=filecache) as inp:
+                         **filecache) as inp:
             lineno = 0
             # TODO assumes that newline is correctly specified to fsspec
             for line in inp:
@@ -413,14 +415,14 @@ class CSVSniffer:
                 del self.column[column]
         self.columns.options = [str(c) for c in df.columns]
         self.columns.disabled = False
-        self.show_column(str(df.columns[0]))
+        self.columns.value = [str(df.columns[0])]
 
     def get_column(self, column):
         df = self._df
         if column not in df.columns:
             try:
                 return self.get_column(int(column))
-            except ValueError:
+            except:
                 pass
             return None
         col = self.column.get(column, None)
@@ -439,8 +441,13 @@ class CSVSniffer:
 
     def rename_columns(self):
         columns = list(self._df.columns)
-        names = [self.column[col].rename.value
-                 for col in columns]
+        names = []
+        for col in columns:
+            if col in self.column:
+                name = self.column[col].rename.value
+                names.append(name)
+            else:
+                names.append(col)
         if names != columns:
             self.params['names'] = names
         else:
@@ -460,6 +467,8 @@ class CSVSniffer:
         types = {}
         parse_dates = []
         for name in list(self._df.columns):
+            if name not in self.column:
+                continue
             col = self.column[name]
             if col.use.value and col.default_type != col.retype.value:
                 type = col.retype.value
@@ -504,30 +513,36 @@ class ColumnInfo:
         self.series = series
         self.default_type = series.dtype.name
         self.name = widgets.Text(description="Name:",
-                                 value=str(series.name),
                                  continuous_update=False,
                                  disabled=True)
         self.type = widgets.Text(description="Type:",
-                                 value=series.dtype.name,
+                                 continuous_update=False,
                                  disabled=True)
         self.use = widgets.Checkbox(description="Use",
                                     value=True)
-        self.use.observe(self.usecols_column, names='value')
         self.rename = widgets.Text(description="Rename:",
-                                   value=str(series.name))
-        self.rename.observe(self.rename_column, names='value')
+                                   continuous_update=False)
         self.retype = widgets.Dropdown(description="Retype:",
-                                       options=self.retype_values(),
-                                       value=series.dtype.name)
-        self.retype.observe(self.retype_column, names='value')
-        self.nunique = widgets.Text(description="Unique vals:",
-                                    value=f"{series.nunique()}/{len(series)}")
+                                       options=self.retype_values())
+        self.nunique = widgets.Text(description="Unique vals:")
         self.box = widgets.VBox()
         self.box.children = [
             self.name, self.rename,
             self.type, self.retype,
             self.use, self.nunique,
         ]
+        self._init_values()
+        self.use.observe(self.usecols_column, names='value')
+        self.rename.observe(self.rename_column, names='value')
+        self.retype.observe(self.retype_column, names='value')
+
+    def _init_values(self):
+        series = self.series
+        self.name.value = str(series.name)
+        self.rename.value = str(series.name)
+        self.type.value = series.dtype.name
+        self.retype.value = series.dtype.name
+        self.nunique.value = f"{series.nunique()}/{len(series)}"
 
     def retype_values(self):
         type = self.series.dtype.name
