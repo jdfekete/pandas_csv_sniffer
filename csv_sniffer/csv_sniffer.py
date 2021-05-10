@@ -170,7 +170,9 @@ class CSVSniffer:
             description="False values", continuous_update=False
         )
         self.false_values.observe(self._false_values_cb, names="value")
-        self.na_values = widgets.Text(description="NA values", continuous_update=False)
+        self.na_values = widgets.Text(
+            description="NA values", continuous_update=False
+        )
         self.na_values.observe(self._na_values_cb, names="value")
         self.special_values = widgets.VBox(
             [self.true_values, self.false_values, self.na_values],
@@ -182,11 +184,15 @@ class CSVSniffer:
             [
                 self.delimiter,
                 self.date,
-                widgets.VBox([self.lines, self.header, self.skiprows], layout=layout),
+                widgets.VBox(
+                    [self.lines, self.header, self.skiprows], layout=layout
+                ),
                 self.special_values,
             ]
         )
-        for i, title in enumerate(["Delimiters", "Dates", "Header", "Special values"]):
+        for i, title in enumerate(
+            ["Delimiters", "Dates", "Header", "Special values"]
+        ):
             self.global_tab.set_title(i, title)
 
         # Column selection
@@ -212,7 +218,9 @@ class CSVSniffer:
                 ),
             ]
         )
-        self.cmdline = widgets.Textarea(layout=widgets.Layout(width="100%"), rows=3)
+        self.cmdline = widgets.Textarea(
+            layout=widgets.Layout(width="100%"), rows=3
+        )
         self.testBtn = widgets.Button(description="Test")
         self.box = widgets.VBox(
             [
@@ -228,7 +236,7 @@ class CSVSniffer:
             ]
         )
         self.testBtn.on_click(self.test_cmd)
-        self.column_info = []
+        self.column_info = None
         self.clear()
         self.dataframe()
 
@@ -253,7 +261,7 @@ class CSVSniffer:
         skip = change["new"]
         self._head = ""
         if skip == 0:
-            self.params.pop("skiprows")
+            self.params.pop("skiprows", False)
         else:
             self.params["skiprows"] = skip
         self.set_cmdline()
@@ -291,7 +299,9 @@ class CSVSniffer:
         if self._df is not None:
             self._reset()
         else:
-            self.params = _merge_with_dialect_properties(self._dialect, self.params)
+            self.params = _merge_with_dialect_properties(
+                self._dialect, self.params
+            )
         self.dataframe(force=True)
 
     def _reset(self):
@@ -304,7 +314,9 @@ class CSVSniffer:
             if name != "sep" and param.default is not inspect._empty:
                 self.params[name] = args.pop(name, param.default)
         self.params["index_col"] = False
-        self.params = _merge_with_dialect_properties(self._dialect, self.params)
+        self.params = _merge_with_dialect_properties(
+            self._dialect, self.params
+        )
         self.set_cmdline()
         if args:
             raise ValueError(f"extra keywords arguments {args}")
@@ -334,7 +346,9 @@ class CSVSniffer:
 
     def _format_head(self):
         self.head_text.value = (
-            '<pre style="white-space: pre">' + quote_html(self._head) + "</pre>"
+            '<pre style="white-space: pre">'
+            + quote_html(self._head)
+            + "</pre>"
         )
 
     def head(self):
@@ -344,7 +358,9 @@ class CSVSniffer:
             filecache = {"filecache": {"cache_storage": self.cache_storage}}
         else:
             filecache = {}
-        with fsspec.open(self.path, mode="rt", compression="infer", **filecache) as inp:
+        with fsspec.open(
+            self.path, mode="rt", compression="infer", **filecache
+        ) as inp:
             lineno = 0
             # TODO assumes that newline is correctly specified to fsspec
             for line in inp:
@@ -433,9 +449,10 @@ class CSVSniffer:
 
     def get_column(self, column):
         df = self._df
+        if column in df.columns:
+            return ColumnInfo(self, df[column])
         try:
-            if column not in df.columns:
-                return self.get_column(int(column))
+            column = int(column)
             return ColumnInfo(self, df[column])
         except Exception:
             pass
@@ -443,6 +460,7 @@ class CSVSniffer:
 
     def show_column(self, column):
         col = self.get_column(column)
+        self.column_info = col
         if col is None:
             # print(f"Not in columns: '{column}'")
             self.details.children = [self.no_detail]
@@ -452,27 +470,34 @@ class CSVSniffer:
     def show_columns(self, columns):
         if len(columns) == 1:
             return self.show_column(columns[0])
-        col = ColumnsInfo(self, [self._df[column] for column in columns])
+        try:
+            col = ColumnsInfo(self, [self._df[column] for column in columns])
+        except Exception:
+            col = ColumnsInfo(self, [self._df[int(column)]
+                                     for column in columns])
+        self.column_info = col
         self.details.children = [col.box]
 
     def rename_columns(self, col):
-        series = _force_list(col.series)
+        series = col.series
+        if isinstance(series, list):
+            series = series[0]
         columns = list(self._df.columns)
-        if self._names in None:
+        if self._names is None:
             self._names = columns.copy()
         index = columns.index(series.name)
         self._names[index] = col.rename.value
         if self._names != columns:
             self.params["names"] = self._names
         else:
-            self.params.pop("names")
+            self.params.pop("names", False)
         self.set_cmdline()
 
     def get_column_name(self, col):
         names = self.params.get("names", None)
         if names is None:
             return col.name
-        if type(col.name) == int:
+        if isinstance(col.name, np.int):
             return names[col.name]
         idx = self._df.columns.index(col.name)
         return names[idx]
@@ -491,7 +516,7 @@ class CSVSniffer:
             usecols.difference_update(cols)
             self.remove_dtype(col)
         if usecols == set(self._df.columns):
-            self.params.pop("usecols")
+            self.params.pop("usecols", False)
         else:
             self.params["usecols"] = list(usecols)
         self.set_cmdline()
@@ -518,17 +543,17 @@ class CSVSniffer:
                 else:
                     types[name] = typename
             else:
-                types.pop(name)
+                types.pop(name, False)
         if types:
             self._dtypes = types
             self.params["dtype"] = types
         else:
             self._dtypes = None
-            self.params.pop("dtype")
+            self.params.pop("dtype", False)
         if parse_dates:
             self.params["parse_dates"] = parse_dates
         else:
-            self.params.pop("parse_dates")
+            self.params.pop("parse_dates", False)
         self.set_cmdline()
 
     def remove_dtype(self, col):
@@ -537,7 +562,7 @@ class CSVSniffer:
         parse_dates = self.params.get("parse_dates") or []
         for series in series_list:
             name = series.name
-            types.pop(name)
+            types.pop(name, False)
             if name in parse_dates:
                 parse_dates.remove(name)
         if types:
@@ -545,11 +570,11 @@ class CSVSniffer:
             self.params["dtype"] = types
         else:
             self._dtypes = None
-            self.params.pop("dtype")
+            self.params.pop("dtype", False)
         if parse_dates:
             self.params["parse_dates"] = parse_dates
         else:
-            self.params.pop("parse_dates")
+            self.params.pop("parse_dates", False)
         self.set_cmdline()
 
     def get_column_dtype(self, series):
@@ -572,14 +597,14 @@ class CSVSniffer:
 class ColumnInfo:
     numeric_types = [
         "",
-        "int8",
         "uint8",
-        "int16",
+        "int8",
         "uint16",
-        "int32",
+        "int16",
         "uint32",
-        "int64",
+        "int32",
         "uint64",
+        "int64",
         "float32",
         "float64",
         "str",
@@ -593,7 +618,9 @@ class ColumnInfo:
         self.name = widgets.Text(
             description="Name:", continuous_update=False, disabled=True
         )
-        self.rename = widgets.Text(description="Rename:", continuous_update=False)
+        self.rename = widgets.Text(
+            description="Rename:", continuous_update=False
+        )
         self.type = widgets.Text(
             description="Type:", continuous_update=False, disabled=True
         )
@@ -629,7 +656,7 @@ class ColumnInfo:
         sniffer = self.sniffer
         series = self.series
         self.name.value = str(series.name)
-        self.rename.value = sniffer.get_column_name(series)
+        self.rename.value = str(sniffer.get_column_name(series))
         dtype = series.dtype
         self.type.value = dtype.name
         self.retype.options = self.retype_values(dtype.name)
@@ -647,7 +674,7 @@ class ColumnInfo:
         return typename
 
     def rename_column(self, change):
-        self.sniffer.rename_columns()
+        self.sniffer.rename_columns(self)
 
     def usecols_column(self, change):
         self.sniffer.usecols_columns(self)
@@ -667,7 +694,7 @@ class ColumnsInfo(ColumnInfo):
     def _init_values(self):
         series = self.series
         assert isinstance(series, list)
-        self.name.value = ", ".join([s.name for s in series])
+        self.name.value = ", ".join([str(s.name) for s in series])
         self.rename.value = self.name.value
         dtypes = set()
         for s in series:
