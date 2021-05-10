@@ -1,28 +1,28 @@
-'''
+"""
 Sniffer for Pandas csv_read, allows interactive specification of data types,
 names, and various parameters before loading the whole file.
-'''
+"""
 import csv
 import inspect
 import io
-import logging
-# import pprint
 
 import pandas as pd
+import numpy as np
 import fsspec
 from ipywidgets import widgets
-# from traitlets import HasTraits, observe, Instance
 
-logger = logging.getLogger(__name__)
+# from traitlets import HasTraits, observe, Instance
 
 
 def quote_html(text):
-    return text.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+    return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
 
-_parser_defaults = {key: val.default
-                    for key, val in inspect.signature(pd.read_csv).parameters.items()
-                    if val.default is not inspect._empty}
+_parser_defaults = {
+    key: val.default
+    for key, val in inspect.signature(pd.read_csv).parameters.items()
+    if val.default is not inspect._empty
+}
 
 # Borrowed from pandas
 MANDATORY_DIALECT_ATTRS = (
@@ -71,10 +71,16 @@ def _merge_with_dialect_properties(dialect, defaults):
     return kwds
 
 
+def _force_list(series):
+    if isinstance(series, list):
+        return series
+    return [series]
+
+
 class CSVSniffer:
     """
-    Non progressive class to assist in specifying parameters
-    to a CSV module
+    Jupyter notebook component to assist in specifying parameters
+    to the pandas.load_csv function.
     """
 
     signature = inspect.signature(pd.read_csv)
@@ -85,135 +91,149 @@ class CSVSniffer:
         self.path = path
         self._args = args
         self._cache_storage = cache_storage
-        self.lines = widgets.BoundedIntText(value=lines,
-                                            min=10, max=1000,
-                                            continuous_update=False,
-                                            description='Lines:')
-        self.lines.observe(self._lines_cb, names='value')
+        self.lines = widgets.BoundedIntText(
+            value=lines,
+            min=10,
+            max=1000,
+            continuous_update=False,
+            description="Lines:",
+        )
+        self.lines.observe(self._lines_cb, names="value")
         self._head = ""
         self._dialect = None
         self.params = {}
         self._df = None
         self._df2 = None
-        self._rename = None
-        self._types = None
+        self._dtypes = None
+        self._usecols = None
+        self._names = None
         # Widgets
-        layout = widgets.Layout(border='solid')
+        layout = widgets.Layout(border="solid")
         self.head_text = widgets.HTML()
         self.df_text = widgets.HTML()
         self.df2_text = widgets.HTML()
-        self.error_msg = widgets.Textarea(description='Error:')
-        self.tab = widgets.Tab([
-            self.head_text,
-            self.df_text,
-            self.df2_text],
-            layout=widgets.Layout(max_height='1024px'))
+        self.error_msg = widgets.Textarea(description="Error:")
+        self.tab = widgets.Tab(
+            [self.head_text, self.df_text, self.df2_text],
+            layout=widgets.Layout(max_height="1024px"),
+        )
         for i, title in enumerate(["Head", "DataFrame", "DataFrame2"]):
             self.tab.set_title(i, title)
         # Delimiters
         self.delimiter = widgets.RadioButtons(
-            orientation='horizontal',
-            options=list(zip(self.delimiters, self.del_values)))
-        self.delimiter.observe(self._delimiter_cb, names='value')
-        self.delim_other = widgets.Text()  # description='Other:')
-        self.delim_other.observe(self._delimiter_cb, names='value')
-        self.delimiter = widgets.VBox([
-            # widgets.Label("Delimiter"),
-            self.delimiter, self.delim_other],
-            layout=layout)
+            orientation="horizontal",
+            options=list(zip(self.delimiters, self.del_values)),
+        )
+        self.delimiter.observe(self._delimiter_cb, names="value")
+        self.delim_other = widgets.Text()
+        self.delim_other.observe(self._delimiter_cb, names="value")
+        self.delimiter = widgets.VBox(
+            [
+                self.delimiter,
+                self.delim_other,
+            ],
+            layout=layout,
+        )
         # Dates
         # TODO
-        self.dayfirst = widgets.Checkbox(description="Dayfirst",
-                                         value=False)
-        self.date_parser = widgets.Text(description="Date parser:",
-                                        value="")
-        self.infer_datetime = widgets.Checkbox(description="Infer datetime",
-                                               value=False)
-        self.date = widgets.VBox([
-            self.dayfirst,
-            self.infer_datetime,
-            self.date_parser],
-            layout=layout)
+        self.dayfirst = widgets.Checkbox(description="Dayfirst", value=False)
+        self.date_parser = widgets.Text(description="Date parser:", value="")
+        self.infer_datetime = widgets.Checkbox(
+            description="Infer datetime", value=False
+        )
+        self.date = widgets.VBox(
+            [self.dayfirst, self.infer_datetime, self.date_parser],
+            layout=layout,
+        )
         # Header
-        self.header = widgets.BoundedIntText(value=-1,
-                                             min=-1, max=1000,
-                                             continuous_update=False,
-                                             description='Header:')
-        self.skiprows = widgets.BoundedIntText(value=0,
-                                               min=0, max=1000,
-                                               continuous_update=False,
-                                               description='Skip rows:')
-        self.skiprows.observe(self._skiprows_cb, names='value')
+        self.header = widgets.BoundedIntText(
+            value=-1,
+            min=-1,
+            max=1000,
+            continuous_update=False,
+            description="Header:",
+        )
+        self.skiprows = widgets.BoundedIntText(
+            value=0,
+            min=0,
+            max=1000,
+            continuous_update=False,
+            description="Skip rows:",
+        )
+        self.skiprows.observe(self._skiprows_cb, names="value")
         # Special values
-        self.true_values = widgets.Text(description="True values",
-                                        continuous_update=False)
-        self.true_values.observe(self._true_values_cb, names='value')
-        self.false_values = widgets.Text(description="False values",
-                                         continuous_update=False)
-        self.false_values.observe(self._false_values_cb, names='value')
-        self.na_values = widgets.Text(description="NA values",
-                                      continuous_update=False)
-        self.na_values.observe(self._na_values_cb, names='value')
-        self.special_values = widgets.VBox([
-            self.true_values,
-            self.false_values,
-            self.na_values],
-            layout=layout)
+        self.true_values = widgets.Text(
+            description="True values", continuous_update=False
+        )
+        self.true_values.observe(self._true_values_cb, names="value")
+        self.false_values = widgets.Text(
+            description="False values", continuous_update=False
+        )
+        self.false_values.observe(self._false_values_cb, names="value")
+        self.na_values = widgets.Text(description="NA values", continuous_update=False)
+        self.na_values.observe(self._na_values_cb, names="value")
+        self.special_values = widgets.VBox(
+            [self.true_values, self.false_values, self.na_values],
+            layout=layout,
+        )
 
         # Global tab with Delimiters and Dates
-        self.global_tab = widgets.Tab([
-            self.delimiter,
-            self.date,
-            widgets.VBox([
-                self.lines,
-                self.header,
-                self.skiprows],
-                layout=layout),
-            self.special_values])
-        for i, title in enumerate(["Delimiters",
-                                   "Dates",
-                                   "Header",
-                                   "Special values"]):
+        self.global_tab = widgets.Tab(
+            [
+                self.delimiter,
+                self.date,
+                widgets.VBox([self.lines, self.header, self.skiprows], layout=layout),
+                self.special_values,
+            ]
+        )
+        for i, title in enumerate(["Delimiters", "Dates", "Header", "Special values"]):
             self.global_tab.set_title(i, title)
 
         # Column selection
-        self.columns = widgets.SelectMultiple(disabled=True,
-                                              rows=7)
-        self.columns.observe(self._columns_cb, names='value')
+        self.columns = widgets.SelectMultiple(disabled=True, rows=15)
+        self.columns.observe(self._columns_cb, names="value")
         # Column details
-        self.column = {}
         self.no_detail = widgets.Label(value="No Column Selected")
-        self.details = widgets.Box([
-            self.no_detail],
-            label="Details")
+        self.details = widgets.Box([self.no_detail], label="Details")
         # Toplevel Box
-        self.top = widgets.HBox([
-            self.global_tab,
-            widgets.VBox([
-                widgets.Label("Columns"),
-                self.columns,
-                ],
-                layout=layout),
-            widgets.VBox([
-                widgets.Label("Selected Column"),
-                self.details],
-                layout=layout)])
-        self.cmdline = widgets.Textarea(layout=widgets.Layout(width="100%"),
-                                        rows=3)
+        self.top = widgets.HBox(
+            [
+                self.global_tab,
+                widgets.VBox(
+                    [
+                        widgets.Label("Columns"),
+                        self.columns,
+                    ],
+                    layout=layout,
+                ),
+                widgets.VBox(
+                    [widgets.Label("Selected Column"), self.details],
+                    layout=layout,
+                ),
+            ]
+        )
+        self.cmdline = widgets.Textarea(layout=widgets.Layout(width="100%"), rows=3)
         self.testBtn = widgets.Button(description="Test")
-        self.box = widgets.VBox([
-            self.top,
-            widgets.HBox([self.testBtn,
-                          widgets.Label(value="CmdLine:"),
-                          self.cmdline]),
-            self.tab])
+        self.box = widgets.VBox(
+            [
+                self.top,
+                widgets.HBox(
+                    [
+                        self.testBtn,
+                        widgets.Label(value="CmdLine:"),
+                        self.cmdline,
+                    ]
+                ),
+                self.tab,
+            ]
+        )
         self.testBtn.on_click(self.test_cmd)
         self.column_info = []
         self.clear()
         self.dataframe()
 
     def _parse_list(self, key, values):
-        split = [s for s in values.split(',') if s]
+        split = [s for s in values.split(",") if s]
         if split:
             self.params[key] = split
         else:
@@ -221,43 +241,46 @@ class CSVSniffer:
         self.set_cmdline()
 
     def _true_values_cb(self, change):
-        self._parse_list('true_values', change['new'])
+        self._parse_list("true_values", change["new"])
 
     def _false_values_cb(self, change):
-        self._parse_list('false_values', change['new'])
+        self._parse_list("false_values", change["new"])
 
     def _na_values_cb(self, change):
-        self._parse_list('na_values', change['new'])
+        self._parse_list("na_values", change["new"])
 
     def _skiprows_cb(self, change):
-        skip = change['new']
-        self._head = ''
+        skip = change["new"]
+        self._head = ""
         if skip == 0:
-            self.params.pop('skiprows')
+            self.params.pop("skiprows")
         else:
-            self.params['skiprows'] = skip
+            self.params["skiprows"] = skip
         self.set_cmdline()
         self.dataframe(force=True)
 
     def _lines_cb(self, change):
-        self._head = ''
+        self._head = ""
         self.dataframe(force=True)
 
     def _delimiter_cb(self, change):
-        delim = change['new']
+        delim = change["new"]
         # print(f"Delimiter: '{delim}'")
         self.set_delimiter(delim)
 
     def _columns_cb(self, change):
-        column = change['new']
+        column = change["new"]
+        if not column:
+            return
         if len(column) == 1:
             column = column[0]
-        # print(f"Column: '{column}'")
-        self.show_column(column)
+            self.show_column(column)
+        else:
+            self.show_columns(column)
 
     def set_delimiter(self, delim):
         if delim == "skip":
-            delim = ' '
+            delim = " "
             if self.params.get("skipinitialspace"):
                 return
             self.params["skipinitialspace"] = True
@@ -268,25 +291,27 @@ class CSVSniffer:
         if self._df is not None:
             self._reset()
         else:
-            self.params = _merge_with_dialect_properties(self._dialect,
-                                                         self.params)
+            self.params = _merge_with_dialect_properties(self._dialect, self.params)
         self.dataframe(force=True)
 
     def _reset(self):
         args = self._args.copy()
         self.params = {}
+        # TODO can we keep them somehow?
+        self._usecols = None
+        self._names = None
         for name, param in self.signature.parameters.items():
-            if name != 'sep' and param.default is not inspect._empty:
+            if name != "sep" and param.default is not inspect._empty:
                 self.params[name] = args.pop(name, param.default)
-        self.params['index_col'] = False
-        self.params = _merge_with_dialect_properties(self._dialect,
-                                                     self.params)
+        self.params["index_col"] = False
+        self.params = _merge_with_dialect_properties(self._dialect, self.params)
         self.set_cmdline()
         if args:
             raise ValueError(f"extra keywords arguments {args}")
 
     def kwargs(self):
         "Return the arguments to pass to pandas.csv_read"
+        # First, purge the columns not used from dtype and parse_dates
         params = {}
         for key, val in self.params.items():
             default = _parser_defaults[key]
@@ -301,27 +326,25 @@ class CSVSniffer:
 
     def clear(self):
         self.lines.value = 100
-        self._head = ''
+        self._head = ""
         self.head_text.value = '<pre style="white-space: pre"></pre>'
-        self.df_text.value = ''
+        self.df_text.value = ""
         self._dialect = None
         self._reset()
 
     def _format_head(self):
-        self.head_text.value = ('<pre style="white-space: pre">' +
-                                quote_html(self._head) +
-                                '</pre>')
+        self.head_text.value = (
+            '<pre style="white-space: pre">' + quote_html(self._head) + "</pre>"
+        )
 
     def head(self):
         if self._head:
             return self._head
         if self._cache_storage:
-            filecache = {'filecache': {'cache_storage': self.cache_storage}}
+            filecache = {"filecache": {"cache_storage": self.cache_storage}}
         else:
             filecache = {}
-        with fsspec.open(self.path, mode="rt",
-                         compression="infer",
-                         **filecache) as inp:
+        with fsspec.open(self.path, mode="rt", compression="infer", **filecache) as inp:
             lineno = 0
             # TODO assumes that newline is correctly specified to fsspec
             for line in inp:
@@ -341,13 +364,13 @@ class CSVSniffer:
         self._dialect = sniffer.sniff(head)
         # self.params['dialect'] = self._dialect
         self.set_delimiter(self._dialect.delimiter)
-        if self.params['header'] == 'infer':
+        if self.params["header"] == "infer":
             if sniffer.has_header(head):
-                self.params['header'] = 0
+                self.params["header"] = 0
                 self.header.value = 0
             else:
                 self.header.value = -1
-                self.params['header'] = None
+                self.params["header"] = None
         return self._dialect
 
     def dataframe(self, force=False):
@@ -358,15 +381,15 @@ class CSVSniffer:
         try:
             # print(f"read_csv params: {self.params}")
             self._df = pd.read_csv(strin, **self.params)
-            self.column = {}
         except ValueError as e:
             self._df = None
-            self.df_text.value = f'''
+            self.df_text.value = f"""
 <pre style="white-space: pre">Error {quote_html(repr(e))}</pre>
-'''
+"""
         else:
-            with pd.option_context('display.max_rows', self.lines.value,
-                                   'display.max_columns', 0):
+            with pd.option_context(
+                "display.max_rows", self.lines.value, "display.max_columns", 0
+            ):
                 self.df_text.value = self._df._repr_html_()
         self.dataframe_to_columns()
         self.dataframe_to_params()
@@ -378,12 +401,13 @@ class CSVSniffer:
             self._df2 = pd.read_csv(strin, **self.params)
         except ValueError as e:
             self._df2 = None
-            self.df2_text.value = f'''
+            self.df2_text.value = f"""
 <pre style="white-space: pre">Error {quote_html(repr(e))}</pre>
-'''
+"""
         else:
-            with pd.option_context('display.max_rows', self.lines.value,
-                                   'display.max_columns', 0):
+            with pd.option_context(
+                "display.max_rows", self.lines.value, "display.max_columns", 0
+            ):
                 self.df2_text.value = self._df2._repr_html_()
         self.tab.selected_index = 2
 
@@ -403,33 +427,19 @@ class CSVSniffer:
             self.columns.disabled = True
             return
         # Lazy creation of columns
-        # for column in df.columns:
-        #     col = df[column]
-        #     if self.column.get(column) is None:
-        #         col = ColumnInfo(self, col)
-        #         self.column[column] = col
-        for column in list(self.column):
-            if column not in df.columns:
-                col = self.column[column]
-                col.box.close()
-                del self.column[column]
         self.columns.options = [str(c) for c in df.columns]
         self.columns.disabled = False
         self.columns.value = [str(df.columns[0])]
 
     def get_column(self, column):
         df = self._df
-        if column not in df.columns:
-            try:
+        try:
+            if column not in df.columns:
                 return self.get_column(int(column))
-            except:
-                pass
-            return None
-        col = self.column.get(column, None)
-        if col is None:
-            col = ColumnInfo(self, df[column])
-            self.column[column] = col
-        return col
+            return ColumnInfo(self, df[column])
+        except Exception:
+            pass
+        return None
 
     def show_column(self, column):
         col = self.get_column(column)
@@ -439,55 +449,120 @@ class CSVSniffer:
             return
         self.details.children = [col.box]
 
-    def rename_columns(self):
+    def show_columns(self, columns):
+        if len(columns) == 1:
+            return self.show_column(columns[0])
+        col = ColumnsInfo(self, [self._df[column] for column in columns])
+        self.details.children = [col.box]
+
+    def rename_columns(self, col):
+        series = _force_list(col.series)
         columns = list(self._df.columns)
-        names = []
-        for col in columns:
-            if col in self.column:
-                name = self.column[col].rename.value
-                names.append(name)
-            else:
-                names.append(col)
-        if names != columns:
-            self.params['names'] = names
+        if self._names in None:
+            self._names = columns.copy()
+        index = columns.index(series.name)
+        self._names[index] = col.rename.value
+        if self._names != columns:
+            self.params["names"] = self._names
         else:
-            self.params.pop('names')
+            self.params.pop("names")
         self.set_cmdline()
 
-    def usecols_columns(self):
-        names = [col for col in self._df.columns
-                 if self.column[col].use.value]
-        if names == list(self._df.columns):
-            del self.params['usecols']
+    def get_column_name(self, col):
+        names = self.params.get("names", None)
+        if names is None:
+            return col.name
+        if type(col.name) == int:
+            return names[col.name]
+        idx = self._df.columns.index(col.name)
+        return names[idx]
+
+    def usecols_columns(self, col):
+        series = _force_list(col.series)
+        cols = {s.name for s in series}
+        if self._usecols is None:
+            usecols = set(self._df.columns)
         else:
-            self.params['usecols'] = names
+            usecols = self._usecols
+        if col.use.value:
+            usecols.update(cols)
+            self.retype_columns(col)  # restore changed dtype
+        else:
+            usecols.difference_update(cols)
+            self.remove_dtype(col)
+        if usecols == set(self._df.columns):
+            self.params.pop("usecols")
+        else:
+            self.params["usecols"] = list(usecols)
         self.set_cmdline()
 
-    def retype_columns(self):
-        types = {}
-        parse_dates = []
-        for name in list(self._df.columns):
-            if name not in self.column:
-                continue
-            col = self.column[name]
-            if col.use.value and col.default_type != col.retype.value:
-                type = col.retype.value
-                if type == "datetime":
+    def is_column_used(self, col):
+        usecols = self.params.get("usecols", None)
+        if not usecols:
+            return True
+        return col.name in usecols
+
+    def retype_columns(self, col):
+        series_list = _force_list(col.series)
+        types = self.params.get("dtype") or {}
+        parse_dates = self.params.get("parse_dates") or []
+        for series in series_list:
+            name = series.name
+            typename = col.retype.value or series.dtype.name
+            if name in parse_dates:
+                parse_dates.remove(name)
+            if series.dtype.name != typename:
+                if typename == "datetime":
                     types[name] = "str"
                     parse_dates.append(name)
                 else:
-                    types[name] = type
+                    types[name] = typename
+            else:
+                types.pop(name)
         if types:
-            self._types = types
-            self.params['dtype'] = types
+            self._dtypes = types
+            self.params["dtype"] = types
         else:
-            self._types = None
-            del self.params['dtype']
+            self._dtypes = None
+            self.params.pop("dtype")
         if parse_dates:
-            self.params['parse_dates'] = parse_dates
+            self.params["parse_dates"] = parse_dates
         else:
-            self.params['parse_dates'] = None
+            self.params.pop("parse_dates")
         self.set_cmdline()
+
+    def remove_dtype(self, col):
+        series_list = _force_list(col.series)
+        types = self.params.get("dtype") or {}
+        parse_dates = self.params.get("parse_dates") or []
+        for series in series_list:
+            name = series.name
+            types.pop(name)
+            if name in parse_dates:
+                parse_dates.remove(name)
+        if types:
+            self._dtypes = types
+            self.params["dtype"] = types
+        else:
+            self._dtypes = None
+            self.params.pop("dtype")
+        if parse_dates:
+            self.params["parse_dates"] = parse_dates
+        else:
+            self.params.pop("parse_dates")
+        self.set_cmdline()
+
+    def get_column_dtype(self, series):
+        if self._dtypes and series.name in self._dtypes:
+            dtype = self._dtypes[series.name]
+            if dtype == "str" and self.is_column_date(series):
+                return "datetime"
+            return dtype
+        return ""
+
+    def is_column_date(self, col):
+        parse_dates = self.params.get("parse_dates", None)
+        return parse_dates and col.name in parse_dates
 
     def load_dataframe(self):
         "Full load the DataFrame with the GUI parameters"
@@ -496,67 +571,86 @@ class CSVSniffer:
 
 class ColumnInfo:
     numeric_types = [
-        'int8', 'uint8',
-        'int16', 'uint16',
-        'int32', 'int64',
-        'uint32', 'uint64',
-        'float32', 'float64',
-        'str'
+        "",
+        "int8",
+        "uint8",
+        "int16",
+        "uint16",
+        "int32",
+        "uint32",
+        "int64",
+        "uint64",
+        "float32",
+        "float64",
+        "str",
+        "object",
     ]
-    object_types = [
-        'object', 'str',
-        'category', 'datetime'
-    ]
+    object_types = ["", "object", "str", "category", "datetime"]
 
     def __init__(self, sniffer, series):
         self.sniffer = sniffer
         self.series = series
-        self.default_type = series.dtype.name
-        self.name = widgets.Text(description="Name:",
-                                 continuous_update=False,
-                                 disabled=True)
-        self.type = widgets.Text(description="Type:",
-                                 continuous_update=False,
-                                 disabled=True)
-        self.use = widgets.Checkbox(description="Use",
-                                    value=True)
-        self.rename = widgets.Text(description="Rename:",
-                                   continuous_update=False)
-        self.retype = widgets.Dropdown(description="Retype:",
-                                       options=self.retype_values())
-        self.nunique = widgets.Text(description="Unique vals:")
+        self.name = widgets.Text(
+            description="Name:", continuous_update=False, disabled=True
+        )
+        self.rename = widgets.Text(description="Rename:", continuous_update=False)
+        self.type = widgets.Text(
+            description="Type:", continuous_update=False, disabled=True
+        )
+        self.retype = widgets.Dropdown(description="Retype:")
+        self.use = widgets.Checkbox(description="Use", value=True)
+        label_layout = widgets.Layout(border="solid 1px", width="100%")
+        self.nunique = widgets.Label(layout=label_layout)
+        self.min = widgets.Label(layout=label_layout)
+        self.max = widgets.Label(layout=label_layout)
         self.box = widgets.VBox()
         self.box.children = [
-            self.name, self.rename,
-            self.type, self.retype,
-            self.use, self.nunique,
+            self.name,
+            self.rename,
+            self.type,
+            self.retype,
+            self.use,
+            widgets.HBox([widgets.Label(value="Unique vals:"), self.nunique]),
+            widgets.HBox(
+                [
+                    widgets.Label(value="Min:"),
+                    self.min,
+                    widgets.Label(value="Max:"),
+                    self.max,
+                ]
+            ),
         ]
         self._init_values()
-        self.use.observe(self.usecols_column, names='value')
-        self.rename.observe(self.rename_column, names='value')
-        self.retype.observe(self.retype_column, names='value')
+        self.use.observe(self.usecols_column, names="value")
+        self.rename.observe(self.rename_column, names="value")
+        self.retype.observe(self.retype_column, names="value")
 
     def _init_values(self):
+        sniffer = self.sniffer
         series = self.series
         self.name.value = str(series.name)
-        self.rename.value = str(series.name)
-        self.type.value = series.dtype.name
-        self.retype.value = series.dtype.name
+        self.rename.value = sniffer.get_column_name(series)
+        dtype = series.dtype
+        self.type.value = dtype.name
+        self.retype.options = self.retype_values(dtype.name)
+        self.retype.value = sniffer.get_column_dtype(series)
+        self.use.value = sniffer.is_column_used(series)
         self.nunique.value = f"{series.nunique()}/{len(series)}"
+        self.min.value = str(series.min())
+        self.max.value = str(series.max())
 
-    def retype_values(self):
-        type = self.series.dtype.name
-        if type in self.numeric_types:
-            return self.numeric_types
-        elif type == "object":
+    def retype_values(self, typename):
+        if typename in self.object_types:
             return self.object_types
-        return type
+        if typename in self.numeric_types:
+            return self.numeric_types
+        return typename
 
     def rename_column(self, change):
         self.sniffer.rename_columns()
 
     def usecols_column(self, change):
-        self.sniffer.usecols_columns()
+        self.sniffer.usecols_columns(self)
 
     def _test_column_type(self, newtype):
         try:
@@ -566,4 +660,46 @@ class ColumnInfo:
         return None
 
     def retype_column(self, change):
-        self.sniffer.retype_columns()
+        self.sniffer.retype_columns(self)
+
+
+class ColumnsInfo(ColumnInfo):
+    def _init_values(self):
+        series = self.series
+        assert isinstance(series, list)
+        self.name.value = ", ".join([s.name for s in series])
+        self.rename.value = self.name.value
+        dtypes = set()
+        for s in series:
+            dtypes.add(s.dtype)
+        if len(dtypes) == 1:
+            dtype = dtypes.pop()
+            self.type.value = dtype.name
+            self.retype.options = self.retype_values(dtype.name)
+            self.min.value = str(min([s.min() for s in series]))
+            self.max.value = str(max([s.max() for s in series]))
+        else:
+            dtype = np.result_type(*dtypes)
+            self.type.value = str(dtype.name)
+            try:
+                mins = [np.cast[dtype](s.min()) for s in series]
+                self.min.value = str(min(mins))
+            except Exception:
+                self.min.value = "?"
+            try:
+                maxs = [np.cast[dtype](s.max()) for s in series]
+                self.min.value = str(max(maxs))
+            except Exception:
+                self.max.value = "?"
+        # retype
+        self.retype.options = self.retype_values(dtype.name)
+        retypes = set()
+        for s in series:
+            retypes.add(self.sniffer.get_column_dtype(s))
+        if len(retypes) == 1:
+            self.retype.value = list(retypes)[0]
+            self.retype.disabled = False
+        else:
+            self.retype.value = ""
+            self.retype.disabled = True
+        self.nunique.value = ""
