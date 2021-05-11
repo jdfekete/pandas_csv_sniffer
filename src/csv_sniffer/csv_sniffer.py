@@ -473,8 +473,9 @@ class CSVSniffer:
         try:
             col = ColumnsInfo(self, [self._df[column] for column in columns])
         except Exception:
-            col = ColumnsInfo(self, [self._df[int(column)]
-                                     for column in columns])
+            col = ColumnsInfo(
+                self, [self._df[int(column)] for column in columns]
+            )
         self.column_info = col
         self.details.children = [col.box]
 
